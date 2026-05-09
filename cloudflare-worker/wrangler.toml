@@ -1,0 +1,6 @@
+name = "arjun-approval"
+main = "src/index.js"
+compatibility_date = "2024-12-01"
+
+# All other vars are wrangler secrets — set with `wrangler secret put`.
+# This file should NOT contain secrets.

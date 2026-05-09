@@ -1,0 +1,39 @@
+name: Backup Sheet
+
+on:
+  schedule:
+    # Daily at 18:00 UTC = 23:30 IST
+    - cron: '0 18 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: pip }
+
+      - run: pip install -r requirements.txt
+
+      - env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: python scripts/backup_sheet.py
+
+      - name: Commit snapshot if changed
+        run: |
+          git config user.name "arjun-bot"
+          git config user.email "arjun-bot@users.noreply.github.com"
+          git add backups/sheets
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "backup: $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi

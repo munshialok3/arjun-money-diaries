@@ -1,0 +1,13 @@
+.env
+.env.local
+*.json.key
+service-account*.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+node_modules/
+.wrangler/
+backups/sheets/*.csv
+!backups/sheets/.gitkeep
