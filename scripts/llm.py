@@ -66,7 +66,7 @@ def _cache_put(key: str, text: str, meta: dict) -> None:
 # ---------------------------------------------------------------------
 # Gemini 2.5 Flash
 # ---------------------------------------------------------------------
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash-preview-04-17"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
@@ -81,10 +81,10 @@ def call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 1500) ->
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {
-            # Higher temp loses voice consistency; lower flattens humour.
             "temperature": 0.85,
             "topP": 0.95,
             "maxOutputTokens": max_tokens,
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
     r = requests.post(
