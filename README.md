@@ -1,137 +1,216 @@
-# Arjun's Money Diaries — Free Architecture (post-Railway migration)
+# Arjun's Money Diaries — Automated LinkedIn Content Engine
 
-A zero-recurring-cost rebuild of the three n8n workflows that drive the
-"Arjun's Money Diaries" LinkedIn series. n8n + Railway + Claude API
-becomes GitHub Actions + Google Sheets + Gemini 2.5 Flash + Cloudflare
-Workers, with Groq Llama-3.3-70B as fallback and a local Mac-cron path
-as a second fallback.
+![Generate Episode](https://github.com/munshialok3/arjun-money-diaries/actions/workflows/generate.yml/badge.svg)
+![Backup Sheet](https://github.com/munshialok3/arjun-money-diaries/actions/workflows/backup.yml/badge.svg)
 
-**Target steady-state cost: $0/month** for the publishing cadence in
-the workflow (1 episode every 48 hours = ~15 generations/month,
-including regenerates).
+A fully automated LinkedIn content pipeline for a serialised personal finance series. AI generates each episode, a quality gate validates it, you approve from Telegram with one word — it posts to LinkedIn, updates analytics, and queues the next episode. Runs indefinitely at $0/month.
 
-## What replaces what
+**Live series** → [alok-munshi-portfolio.vercel.app/money-diaries](https://alok-munshi-portfolio.vercel.app/money-diaries)
 
-| Old (paid / temporary)                        | New (free, durable)                                 |
-| --------------------------------------------- | --------------------------------------------------- |
-| n8n on Railway (paid after credits expire)    | GitHub Actions (cron) + Cloudflare Worker (webhook) |
-| Anthropic Claude Sonnet 4.5 API ($)           | Google Gemini 2.5 Flash (free) + Groq Llama 3.3 70B fallback |
-| n8n built-in scheduler                        | GitHub Actions `schedule:` cron                     |
-| n8n webhook endpoint on Railway URL           | Cloudflare Worker (100k req/day free, no cold start)|
-| n8n credentials store                         | GitHub Actions Secrets + Worker Secrets             |
-| n8n execution logs                            | GitHub Actions run logs + Worker tail logs          |
-| Manual Railway upkeep                         | Nothing to maintain — both providers are stable     |
+---
 
-**Unchanged** (these were already free and working): Google Sheets as the
-data store, Telegram bot for approvals, LinkedIn UGC API for posting.
+## What it does
 
-## Architecture (text diagram)
+1. **Generates** — GitHub Actions cron triggers every day. Picks the next queued episode from Google Sheets, builds a structured prompt with story continuity and character state, calls Gemini 2.5 Flash (Groq Llama 3.3 70B as automatic fallback). Runs a quality check: word count, dialogue presence, hashtags, teaser line.
+2. **Delivers** — Sends the draft to Telegram with full metadata: title, hook, concept, character, word count, QC label.
+3. **Approves** — You reply with one word: `APPROVE`, `EDIT: [your version]`, `REGENERATE`, or `REJECT`. A Cloudflare Worker receives the message and triggers the approval workflow on GitHub.
+4. **Posts** — Approved text posts to LinkedIn via UGC API. Sheet updates to `posted`. Concepts string refreshes across all queued episodes. Story state updates via a second LLM call.
+5. **Tracks** — Daily watchdog fetches LinkedIn likes and comments and writes them back to the Sheet. 6-hourly reminders if an episode is stuck in `pending_approval`.
+6. **Backs up** — Daily git commit of the full Sheet as CSV. Complete version history of every episode ever generated.
+
+---
+
+## Architecture
 
 ```
-                       ┌─────────────────────────────────────────────┐
-                       │  GitHub repo: arjun-money-diaries (private) │
-                       │                                             │
-   cron (every 48h) ──▶│  .github/workflows/generate.yml             │
-                       │     └─▶ scripts/generate_episode.py         │
-                       │           1. Read next queued ep from Sheet │
-                       │           2. Build prompt (same as before)  │
-                       │           3. Call Gemini → Groq fallback    │
-                       │           4. Quality check                  │
-                       │           5. Write draft to Sheet           │
-                       │           6. Telegram: send draft           │
-                       └─────────────────────────────────────────────┘
-                                          │
-                                          ▼  Telegram message: APPROVE / EDIT: ... / REGENERATE / REJECT
-                       ┌─────────────────────────────────────────────┐
-                       │  Cloudflare Worker: arjun-approval          │
-                       │     • Receives Telegram webhook             │
-                       │     • Validates chat_id == 959573065        │
-                       │     • Triggers GitHub workflow_dispatch     │
-                       │       on .github/workflows/approve.yml      │
-                       └─────────────────────────────────────────────┘
-                                          │
-                                          ▼
-                       ┌─────────────────────────────────────────────┐
-                       │  .github/workflows/approve.yml              │
-                       │     └─▶ scripts/handle_approval.py          │
-                       │           APPROVE → post to LinkedIn        │
-                       │                   → update Sheet POSTED     │
-                       │                   → update concepts string  │
-                       │                   → update story state      │
-                       │           EDIT:   → use edited text, post   │
-                       │           REGEN   → mark queued, re-trigger │
-                       │           REJECT  → mark rejected           │
-                       └─────────────────────────────────────────────┘
+GitHub Actions (cron daily 08:00 IST)
+  └── generate_episode.py
+        ├── Google Sheets → next queued episode + story state + last 2 posted episodes
+        ├── Gemini 2.5 Flash → episode draft (Groq Llama 3.3 70B fallback)
+        ├── Quality check → word count / dialogue / hashtags / teaser
+        ├── Google Sheets → save draft, mark pending_approval
+        └── Telegram → send draft for review
 
-                       ┌─────────────────────────────────────────────┐
-                       │  .github/workflows/watchdog.yml             │
-                       │     • Schedule 1: every 6h →                │
-                       │       remind if pending_approval > 6h       │
-                       │     • Schedule 2: daily 10:00 IST →         │
-                       │       fetch LinkedIn likes/comments         │
-                       └─────────────────────────────────────────────┘
+You reply on Telegram (APPROVE / EDIT / REGENERATE / REJECT)
+  └── Cloudflare Worker (arjun-approval.munshialok3.workers.dev)
+        ├── Validates chat_id + webhook secret
+        └── GitHub workflow_dispatch → approve.yml
 
-                       ┌─────────────────────────────────────────────┐
-                       │  Google Sheet (unchanged)                   │
-                       │     • Episodes tab                          │
-                       │     • Story_State tab                       │
-                       │     ↑ accessed via service-account JSON key │
-                       └─────────────────────────────────────────────┘
+GitHub Actions (approve.yml)
+  └── handle_approval.py
+        ├── APPROVE / EDIT → LinkedIn UGC API → post
+        │     ├── Google Sheets → mark posted, save URL
+        │     ├── Rebuild concepts string → update all queued episodes
+        │     └── Gemini → update Story_State tab
+        ├── REGENERATE → mark queued → re-trigger generate.yml
+        └── REJECT → mark rejected
+
+GitHub Actions (watchdog.yml)
+  ├── Every 6h → Telegram reminder if pending_approval
+  └── Daily 10:00 IST → LinkedIn API → sync likes/comments to Sheet
+
+GitHub Actions (backup.yml)
+  └── Daily 23:30 IST → Sheet → CSV → git commit
 ```
 
-## Why this stack (vs alternatives evaluated)
+---
 
-I considered every option in the brief. Decisions:
+## Stack
 
-- **Self-hosted n8n on a free VM (Oracle Cloud, Fly.io, Render):**
-  Rejected. Free tiers shrink unpredictably (Oracle has reclaimed
-  "always-free" instances; Render free web services spin down and have
-  no cron on free tier; Fly.io ended free allowances in 2024). Also —
-  a 24/7 VM to run a job that fires once every 48h is wasteful.
-- **Vercel Cron:** Free tier crons are at most daily on Hobby and
-  function timeout is 10s/60s — too short for a generation flow. Out.
-- **Cloudflare Workers cron only:** 30s wall-clock CPU on paid, ~10ms
-  CPU on free. Would force splitting the generation into chunks. Use
-  Workers only for the webhook (sub-second).
-- **GitHub Actions for the scheduler + work:** Public repo gets
-  unlimited free minutes (private gets 2,000/mo, plenty for our ~15
-  runs/month at ~2 min each). Secrets store is solid. No cold-start
-  surprise. Logs free. **Winner.**
-- **Gemini 2.5 Flash as primary LLM:** ~250-1,500 RPD free, 1M context,
-  no credit card. Quality on this kind of structured creative writing
-  with a tight rubric is excellent — comparable to mid-tier Claude for
-  this use case. Pro is gated to 50 RPD now, so Flash is the realistic
-  pick.
-- **Groq Llama 3.3 70B as fallback:** 1,000 RPD free, 30 RPM, instant
-  failover if Gemini errors. Different vendor, different rate-limit
-  bucket — true redundancy.
-- **Local Mac as third fallback:** A `make generate` script you can
-  run on your Mac if both APIs are down. Same code path.
-- **Ollama / local LLMs:** Possible but a 70B model needs ~40GB RAM
-  and minutes of generation per episode on Apple Silicon. Free-tier
-  hosted APIs win on quality-per-effort here. Keep Ollama in pocket
-  for the day a vendor changes terms.
+| Layer | Tool |
+|---|---|
+| Orchestration | GitHub Actions |
+| AI generation (primary) | Google Gemini 2.5 Flash |
+| AI generation (fallback) | Groq Llama 3.3 70B |
+| Webhook bridge | Cloudflare Workers |
+| Approval channel | Telegram Bot API |
+| Publishing | LinkedIn UGC API |
+| Data store | Google Sheets |
+| Secrets | GitHub Actions Secrets + Cloudflare Worker Secrets |
+| Backups | Git (CSV snapshots) |
+| Monthly cost | $0 |
 
-## What you keep
+---
 
-- The Google Sheet schema, the Telegram bot, the LinkedIn app, and
-  every prompt and quality rule. No content drift.
-- The same approval words: `APPROVE` / `EDIT: ...` / `REGENERATE` /
-  `REJECT`.
-- Story state JSON updates after every successful post.
+## Repo structure
 
-## What's improved
+```
+.github/workflows/
+  generate.yml       # daily cron — generates next episode
+  approve.yml        # triggered by Cloudflare Worker on Telegram reply
+  watchdog.yml       # reminders + LinkedIn analytics sync
+  backup.yml         # daily Sheet → CSV → git commit
 
-- **Prompts are versioned in git.** No more editing JS blobs inside
-  n8n nodes.
-- **Real diff history** on every change to the system prompt.
-- **Built-in retry + multi-provider fallback** (Gemini → Groq).
-- **Output cache** (sha256 of the prompt) so a regenerate-after-no-edit
-  doesn't re-bill or re-spend rate-limit.
-- **Daily Sheet backup** to git as CSV (free version control of your
-  entire content history).
-- **No always-on infra** — nothing can crash, get OOM-killed, or
-  silently stop billing.
+scripts/
+  generate_episode.py   # main generation orchestrator
+  handle_approval.py    # approval routing (approve/edit/regen/reject)
+  watchdog.py           # reminder + analytics modes
+  backup_sheet.py       # Sheet → CSV dump
+  prompts.py            # system prompt + user prompt assembly
+  llm.py                # Gemini + Groq client with fallback + cache
+  qc.py                 # quality check gate
+  sheets.py             # Google Sheets read/write layer
+  comms.py              # Telegram + LinkedIn API wrappers
 
-See `docs/MIGRATION.md` for the step-by-step. See `docs/RUNBOOK.md`
-for ongoing operations.
+cloudflare-worker/
+  src/index.js       # Telegram webhook → GitHub workflow_dispatch bridge
+
+backups/
+  sheets/            # Episodes.csv + Story_State.csv (auto-committed daily)
+
+docs/
+  MIGRATION.md       # original Railway → GitHub Actions migration guide
+  RUNBOOK.md         # ongoing operations
+  RISKS.md           # failure modes and mitigations
+  COST_ANALYSIS.md   # $0 cost breakdown
+  TESTING_AND_ROLLBACK.md
+```
+
+---
+
+## Want to run this for your own series?
+
+### Prerequisites
+- GitHub account (free)
+- Google account (for Sheets + Gemini API key)
+- Groq account (free)
+- Cloudflare account (free)
+- Telegram bot (via @BotFather)
+- LinkedIn developer app (for UGC posting)
+
+### Setup in 8 steps
+
+**1. Fork this repo**
+
+**2. Create a Google Sheet** with two tabs: `Episodes` and `Story_State`. See `backups/sheets/Episodes.csv` for the exact column schema.
+
+**3. Create a Google service account**
+- console.cloud.google.com → IAM → Service Accounts → Create
+- Download the JSON key
+- Share your Sheet with the service account email (Editor access)
+- Enable the Google Sheets API on the project
+
+**4. Get your free API keys**
+- Gemini: https://aistudio.google.com/apikey
+- Groq: https://console.groq.com/keys
+
+**5. Add GitHub Secrets** (Settings → Secrets → Actions):
+
+| Secret | Value |
+|---|---|
+| `GEMINI_API_KEY` | from step 4 |
+| `GROQ_API_KEY` | from step 4 |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | full JSON file contents |
+| `SHEET_ID` | your Sheet ID from the URL |
+| `TELEGRAM_BOT_TOKEN` | your bot token |
+| `TELEGRAM_CHAT_ID` | your numeric chat ID |
+| `LINKEDIN_ACCESS_TOKEN` | from LinkedIn developer app |
+| `LINKEDIN_PERSON_URN` | `urn:li:person:YOUR_ID` |
+| `EPISODES_PORTFOLIO_URL` | your public episodes page URL |
+
+**6. Deploy the Cloudflare Worker**
+```bash
+cd cloudflare-worker
+npm install -g wrangler
+wrangler login
+wrangler deploy
+# Then set secrets:
+wrangler secret put TELEGRAM_BOT_TOKEN
+wrangler secret put TELEGRAM_WEBHOOK_SECRET
+wrangler secret put GITHUB_TOKEN        # fine-grained PAT, Actions: Write
+wrangler secret put AUTHORIZED_CHAT_ID
+wrangler secret put GITHUB_OWNER
+wrangler secret put GITHUB_REPO
+```
+
+**7. Point Telegram webhook at the Worker**
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://arjun-approval.<your-subdomain>.workers.dev","secret_token":"<TELEGRAM_WEBHOOK_SECRET>"}'
+```
+
+**8. Customise the series**
+- Edit `scripts/prompts.py` — replace the system prompt with your own series bible, characters, and tone rules
+- Add your episodes to the Sheet with `Status = queued`
+- Trigger the first run: Actions → Generate Episode → Run workflow
+
+---
+
+## Approval commands
+
+| Command | What happens |
+|---|---|
+| `APPROVE` | Posts draft as-is to LinkedIn |
+| `EDIT: [full text]` | Posts your edited version |
+| `REGENERATE` | Discards draft, generates a fresh one immediately |
+| `REJECT` | Marks episode rejected, moves to next |
+
+---
+
+## Cost breakdown
+
+Everything runs on free tiers. At 1 episode per day cadence you use roughly 2% of available quotas across all providers.
+
+| Component | Free quota | Your usage |
+|---|---|---|
+| GitHub Actions | 2,000 min/mo (private) or unlimited (public) | ~30 min/mo |
+| Gemini 2.5 Flash | ~1,500 req/day | ~1/day |
+| Groq Llama 3.3 70B | 1,000 req/day | fallback only |
+| Cloudflare Workers | 100,000 req/day | ~5/day |
+| Google Sheets API | 60 req/min | ~10/day |
+| **Total** | | **$0/month** |
+
+---
+
+## LinkedIn token rotation
+
+LinkedIn access tokens expire every ~60 days. Update the GitHub secret when it does:
+
+```bash
+gh secret set LINKEDIN_ACCESS_TOKEN --repo <your-username>/arjun-money-diaries
+```
+
+---
+
+Built by [Alok Munshi](https://alok-munshi-portfolio.vercel.app) · IIT Kharagpur '22 · Senior Growth Analyst at Eternal (Zomato)
