@@ -9,5 +9,4 @@ venv/
 .DS_Store
 node_modules/
 .wrangler/
-backups/sheets/*.csv
 !backups/sheets/.gitkeep
