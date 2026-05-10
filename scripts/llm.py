@@ -173,7 +173,7 @@ def generate(
         return text, "gemini"
     except Exception as e:
         last_err = e
-        print(f"[llm] Gemini failed: {e}. Falling back to Groq.")
+        print(f"[llm] Gemini failed: {type(e).__name__}: {e}. Falling back to Groq.")
 
     try:
         text = call_groq(system_prompt, user_prompt, max_tokens=max_tokens)
