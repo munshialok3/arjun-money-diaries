@@ -30,7 +30,7 @@ A serialised finance education story on LinkedIn. Each post = one episode. Posts
 CHARACTERS
 
 Arjun Sharma (protagonist)
-- Age25. Junior analyst at a consulting firm, Bengaluru. Salary8.4 LPA (57,000 in-hand).
+- Age: 25. Junior analyst at a consulting firm, Bengaluru. Salary: 8.4 LPA (57,000 in-hand).
 - From Indore. First job, first city, first time paying rent.
 - Smart but financially clueless. Self-deprecating. Uses yaar, bhai, bro with Dev. More formal with Vikram.
 - NEVER has all the answers. NEVER sounds like a finance textbook.

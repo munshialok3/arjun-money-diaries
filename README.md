@@ -3,7 +3,7 @@
 ![Generate Episode](https://github.com/munshialok3/arjun-money-diaries/actions/workflows/generate.yml/badge.svg)
 ![Backup Sheet](https://github.com/munshialok3/arjun-money-diaries/actions/workflows/backup.yml/badge.svg)
 
-A fully automated LinkedIn content pipeline for a serialised personal finance series. AI generates each episode, a quality gate validates it, you approve from Telegram with one word — it posts to LinkedIn, updates analytics, and queues the next episode. Runs indefinitely at $0/month.
+A fully automated LinkedIn content pipeline for a serialised personal finance series. AI generates each episode, a quality gate validates it, you approve from Telegram with one word — it posts to LinkedIn, updates analytics, and queues the next episode. Runs indefinitely at ~$2-4/month.
 
 **Live series** → [alok-munshi-portfolio.vercel.app/money-diaries](https://alok-munshi-portfolio.vercel.app/money-diaries)
 
@@ -11,7 +11,7 @@ A fully automated LinkedIn content pipeline for a serialised personal finance se
 
 ## What it does
 
-1. **Generates** — GitHub Actions cron triggers every day. Picks the next queued episode from Google Sheets, builds a structured prompt with story continuity and character state, calls Gemini 2.5 Flash (Groq Llama 3.3 70B as automatic fallback). Runs a quality check: word count, dialogue presence, hashtags, teaser line.
+1. **Generates** — GitHub Actions cron triggers every day. Picks the next queued episode from Google Sheets, builds a structured prompt with story continuity and character state, calls Claude Sonnet 4.5 (Groq Llama 3.3 70B as automatic fallback). Runs a quality check: word count, dialogue presence, hashtags, teaser line.
 2. **Delivers** — Sends the draft to Telegram with full metadata: title, hook, concept, character, word count, QC label.
 3. **Approves** — You reply with one word: `APPROVE`, `EDIT: [your version]`, `REGENERATE`, or `REJECT`. A Cloudflare Worker receives the message and triggers the approval workflow on GitHub.
 4. **Posts** — Approved text posts to LinkedIn via UGC API. Sheet updates to `posted`. Concepts string refreshes across all queued episodes. Story state updates via a second LLM call.
@@ -26,7 +26,7 @@ A fully automated LinkedIn content pipeline for a serialised personal finance se
 GitHub Actions (cron daily 08:00 IST)
   └── generate_episode.py
         ├── Google Sheets → next queued episode + story state + last 2 posted episodes
-        ├── Gemini 2.5 Flash → episode draft (Groq Llama 3.3 70B fallback)
+        ├── Claude Sonnet 4.5 → episode draft (Groq Llama 3.3 70B fallback)
         ├── Quality check → word count / dialogue / hashtags / teaser
         ├── Google Sheets → save draft, mark pending_approval
         └── Telegram → send draft for review
@@ -41,7 +41,7 @@ GitHub Actions (approve.yml)
         ├── APPROVE / EDIT → LinkedIn UGC API → post
         │     ├── Google Sheets → mark posted, save URL
         │     ├── Rebuild concepts string → update all queued episodes
-        │     └── Gemini → update Story_State tab
+        │     └── Claude Sonnet 4.5 → update Story_State tab
         ├── REGENERATE → mark queued → re-trigger generate.yml
         └── REJECT → mark rejected
 
@@ -60,7 +60,7 @@ GitHub Actions (backup.yml)
 | Layer | Tool |
 |---|---|
 | Orchestration | GitHub Actions |
-| AI generation (primary) | Google Gemini 2.5 Flash |
+| AI generation (primary) | Claude Sonnet 4.5 |
 | AI generation (fallback) | Groq Llama 3.3 70B |
 | Webhook bridge | Cloudflare Workers |
 | Approval channel | Telegram Bot API |
@@ -68,7 +68,7 @@ GitHub Actions (backup.yml)
 | Data store | Google Sheets |
 | Secrets | GitHub Actions Secrets + Cloudflare Worker Secrets |
 | Backups | Git (CSV snapshots) |
-| Monthly cost | $0 |
+| Monthly cost | ~$2-4 (Claude API) |
 
 ---
 
@@ -87,7 +87,7 @@ scripts/
   watchdog.py           # reminder + analytics modes
   backup_sheet.py       # Sheet → CSV dump
   prompts.py            # system prompt + user prompt assembly
-  llm.py                # Gemini + Groq client with fallback + cache
+  llm.py                # Claude + Groq client with fallback + cache
   qc.py                 # quality check gate
   sheets.py             # Google Sheets read/write layer
   comms.py              # Telegram + LinkedIn API wrappers
@@ -102,7 +102,7 @@ docs/
   MIGRATION.md       # original Railway → GitHub Actions migration guide
   RUNBOOK.md         # ongoing operations
   RISKS.md           # failure modes and mitigations
-  COST_ANALYSIS.md   # $0 cost breakdown
+  COST_ANALYSIS.md   # cost breakdown
   TESTING_AND_ROLLBACK.md
 ```
 
@@ -112,8 +112,8 @@ docs/
 
 ### Prerequisites
 - GitHub account (free)
-- Google account (for Sheets + Gemini API key)
-- Groq account (free)
+- Anthropic account (Claude API — ~$2-4/month at 1 episode/day)
+- Groq account (free — fallback only)
 - Cloudflare account (free)
 - Telegram bot (via @BotFather)
 - LinkedIn developer app (for UGC posting)
@@ -130,15 +130,15 @@ docs/
 - Share your Sheet with the service account email (Editor access)
 - Enable the Google Sheets API on the project
 
-**4. Get your free API keys**
-- Gemini: https://aistudio.google.com/apikey
+**4. Get your API keys**
+- Claude: https://console.anthropic.com/keys
 - Groq: https://console.groq.com/keys
 
 **5. Add GitHub Secrets** (Settings → Secrets → Actions):
 
 | Secret | Value |
 |---|---|
-| `GEMINI_API_KEY` | from step 4 |
+| `ANTHROPIC_API_KEY` | from step 4 |
 | `GROQ_API_KEY` | from step 4 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | full JSON file contents |
 | `SHEET_ID` | your Sheet ID from the URL |
@@ -190,16 +190,16 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
 
 ## Cost breakdown
 
-Everything runs on free tiers. At 1 episode per day cadence you use roughly 2% of available quotas across all providers.
+At 1 episode per day cadence (~30 generations/month including regenerations).
 
-| Component | Free quota | Your usage |
+| Component | Quota / pricing | Your usage |
 |---|---|---|
 | GitHub Actions | 2,000 min/mo (private) or unlimited (public) | ~30 min/mo |
-| Gemini 2.5 Flash | ~1,500 req/day | ~1/day |
-| Groq Llama 3.3 70B | 1,000 req/day | fallback only |
-| Cloudflare Workers | 100,000 req/day | ~5/day |
-| Google Sheets API | 60 req/min | ~10/day |
-| **Total** | | **$0/month** |
+| Claude Sonnet 4.5 | Pay per token | ~$2-4/month |
+| Groq Llama 3.3 70B | 1,000 req/day (free) | fallback only |
+| Cloudflare Workers | 100,000 req/day (free) | ~5/day |
+| Google Sheets API | 60 req/min (free) | ~10/day |
+| **Total** | | **~$2-4/month** |
 
 ---
 

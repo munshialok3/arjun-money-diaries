@@ -35,9 +35,21 @@ def quality_check(raw_text: str) -> dict:
     lower = post_text.lower()
     has_teaser = "dropping in 2 days" in lower or "follow for episode" in lower
     has_dialogue = '"' in post_text or '\u201c' in post_text or '\u2018' in post_text or "'" in post_text
-    word_count_ok = 180 <= word_count <= 350
+    word_count_ok = 210 <= word_count <= 290
+    has_dollar_before_digit = bool(re.search(r'\$\d', post_text))
+    has_non_indian_instruments = bool(re.search(r'401k|IRA\b|Roth IRA|S&P 500|NASDAQ', post_text, re.IGNORECASE))
 
     quality_passed = has_hashtags and has_teaser and has_dialogue and word_count_ok
+
+    has_dialogue = bool(re.search(r'["\u201c][^"\u201d]{5,}["\u201d]', post_text))
+    quality_passed = (
+        has_hashtags
+        and has_teaser
+        and has_dialogue
+        and word_count_ok
+        and not has_dollar_before_digit
+        and not has_non_indian_instruments
+    )
 
     warnings: list[str] = []
     if word_count < 220 or word_count > 280:
@@ -48,6 +60,10 @@ def quality_check(raw_text: str) -> dict:
         warnings.append("Missing hashtags")
     if not has_teaser:
         warnings.append("Missing teaser line")
+    if has_dollar_before_digit:
+        warnings.append("Dollar sign before digit — use ₹ instead")
+    if has_non_indian_instruments:
+        warnings.append("Non-Indian instrument detected (401k/IRA/S&P 500/Roth)")
 
     if quality_passed:
         label = "✅ QC Passed" if not warnings else "⚠️ QC Passed with warnings"
