@@ -34,7 +34,7 @@ def quality_check(raw_text: str) -> dict:
     has_hashtags = "#PersonalFinance" in post_text
     lower = post_text.lower()
     has_teaser = "dropping in 2 days" in lower or "follow for episode" in lower
-    has_dialogue = '"' in post_text
+    has_dialogue = '"' in post_text or '\u201c' in post_text or '\u2018' in post_text or "'" in post_text
     word_count_ok = 180 <= word_count <= 350
 
     quality_passed = has_hashtags and has_teaser and has_dialogue and word_count_ok

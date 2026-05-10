@@ -66,7 +66,7 @@ def _cache_put(key: str, text: str, meta: dict) -> None:
 # ---------------------------------------------------------------------
 # Gemini 2.5 Flash
 # ---------------------------------------------------------------------
-GEMINI_MODEL = "gemini-2.5-flash-preview-04-17"
+GEMINI_MODEL = "gemini-2.0-flash"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
