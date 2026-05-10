@@ -1,22 +1,13 @@
 """
-LLM client with multi-provider fallback and a prompt-hash cache.
+LLM client — Claude Sonnet 4.5 primary, Groq Llama 3.3 70B fallback.
 
-Order of attempts:
-  1. Gemini 2.5 Flash (free tier — generous TPM, ~250-1500 RPD)
-  2. Groq llama-3.3-70b-versatile (free tier — 1000 RPD, 30 RPM)
-  3. Raise; caller decides what to do (Telegram alert + queue back).
+Claude is significantly better at maintaining the Arjun's Money Diaries
+voice, character dynamics, and story continuity. Groq is kept as an
+automatic fallback in case of Claude API errors or rate limits.
 
-Cache:
-  We hash (system + user) prompt and store outputs in
-  backups/llm_cache/<sha256>.json. Useful if a regenerate request
-  comes in for an unchanged input (rare but possible) and as forensic
-  evidence when an episode looks weird.
-
-Why no OpenRouter / HuggingFace / Together: their free tiers shift
-constantly. Groq + Gemini come from different vendors with strong
-free-tier track records. If one breaks, the other carries.
-
-Outputs are returned as plain strings; the caller does QC.
+Cost estimate at 1 episode/day cadence:
+  ~15 generations/month × ~4k input tokens × ~800 output tokens
+  ≈ $2-4/month on Claude Sonnet 4.5
 """
 
 from __future__ import annotations
@@ -32,7 +23,7 @@ import requests
 
 
 # ---------------------------------------------------------------------
-# Cache (optional, opportunistic)
+# Cache (opportunistic)
 # ---------------------------------------------------------------------
 CACHE_DIR = Path(__file__).resolve().parent.parent / "backups" / "llm_cache"
 
@@ -64,42 +55,41 @@ def _cache_put(key: str, text: str, meta: dict) -> None:
 
 
 # ---------------------------------------------------------------------
-# Gemini 2.5 Flash
+# Claude Sonnet 4.5 (primary)
 # ---------------------------------------------------------------------
-GEMINI_MODEL = "gemini-2.0-flash"
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
-)
+CLAUDE_MODEL = "claude-sonnet-4-5"
+CLAUDE_URL = "https://api.anthropic.com/v1/messages"
 
 
-def call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 1500) -> str:
-    api_key = os.environ.get("GEMINI_API_KEY")
+def call_claude(system_prompt: str, user_prompt: str, max_tokens: int = 1500) -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("GEMINI_API_KEY not set")
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
     body = {
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-        "generationConfig": {
-            "temperature": 0.85,
-            "topP": 0.95,
-            "maxOutputTokens": max_tokens,
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": user_prompt}
+        ],
     }
     r = requests.post(
-        f"{GEMINI_URL}?key={api_key}",
-        headers={"Content-Type": "application/json"},
+        CLAUDE_URL,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
         json=body,
         timeout=90,
     )
     if r.status_code != 200:
-        raise RuntimeError(f"Gemini HTTP {r.status_code}: {r.text[:500]}")
+        raise RuntimeError(f"Claude HTTP {r.status_code}: {r.text[:500]}")
     data = r.json()
     try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["content"][0]["text"]
     except (KeyError, IndexError) as e:
-        raise RuntimeError(f"Gemini malformed response: {data}") from e
+        raise RuntimeError(f"Claude malformed response: {data}") from e
 
 
 # ---------------------------------------------------------------------
@@ -142,7 +132,7 @@ def call_groq(system_prompt: str, user_prompt: str, max_tokens: int = 1500) -> s
 
 
 # ---------------------------------------------------------------------
-# Public entry points
+# Public entry point
 # ---------------------------------------------------------------------
 def generate(
     system_prompt: str,
@@ -152,29 +142,30 @@ def generate(
     use_cache: bool = False,
 ) -> tuple[str, str]:
     """
-    Returns (text, provider_used). provider_used is "gemini" or "groq".
+    Returns (text, provider_used). provider_used is "claude" or "groq".
     """
-    # Cache lookup is keyed on the model AND prompts so a Groq retry
-    # doesn't return a Gemini answer.
     if use_cache:
-        for model in (GEMINI_MODEL, GROQ_MODEL):
+        for model in (CLAUDE_MODEL, GROQ_MODEL):
             cached = _cache_get(_cache_key(system_prompt, user_prompt, model))
             if cached:
                 return cached, model.split("-")[0]
 
     last_err: Exception | None = None
+
+    # Primary: Claude
     try:
-        text = call_gemini(system_prompt, user_prompt, max_tokens=max_tokens)
+        text = call_claude(system_prompt, user_prompt, max_tokens=max_tokens)
         _cache_put(
-            _cache_key(system_prompt, user_prompt, GEMINI_MODEL),
+            _cache_key(system_prompt, user_prompt, CLAUDE_MODEL),
             text,
-            {"provider": "gemini", "model": GEMINI_MODEL},
+            {"provider": "claude", "model": CLAUDE_MODEL},
         )
-        return text, "gemini"
+        return text, "claude"
     except Exception as e:
         last_err = e
-        print(f"[llm] Gemini failed: {type(e).__name__}: {e}. Falling back to Groq.")
+        print(f"[llm] Claude failed: {type(e).__name__}: {e}. Falling back to Groq.")
 
+    # Fallback: Groq
     try:
         text = call_groq(system_prompt, user_prompt, max_tokens=max_tokens)
         _cache_put(
@@ -185,5 +176,5 @@ def generate(
         return text, "groq"
     except Exception as e:
         raise RuntimeError(
-            f"Both LLM providers failed. Gemini: {last_err} | Groq: {e}"
+            f"Both LLM providers failed. Claude: {last_err} | Groq: {e}"
         ) from e
