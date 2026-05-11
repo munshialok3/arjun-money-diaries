@@ -2,35 +2,22 @@
  * arjun-approval-worker
  *
  * Receives Telegram webhook → validates the message → triggers the
- * `approve.yml` workflow on GitHub via workflow_dispatch.
+ * appropriate GitHub workflow via workflow_dispatch.
  *
- * Why a Worker (vs hitting the GitHub API from a Telegram bot host):
- *   - We need a public HTTPS URL Telegram can POST to.
- *   - Cloudflare Workers free tier = 100k req/day. We use ~5/day max.
- *   - Sub-millisecond cold start; no spin-up like Render.
- *   - No always-on VM to babysit.
+ * Commands:
+ *   APPROVE    → triggers approve.yml with action=APPROVE
+ *   EDIT: ...  → triggers approve.yml with action=EDIT + text body
+ *   REGENERATE → triggers approve.yml with action=REGENERATE
+ *   REJECT     → triggers approve.yml with action=REJECT
+ *   RUN        → triggers generate.yml (generate next queued episode)
  *
  * Secrets (set with `wrangler secret put <NAME>`):
- *   TELEGRAM_BOT_TOKEN          — same bot token as before
- *   TELEGRAM_WEBHOOK_SECRET     — Telegram-provided header secret
- *                                  (set when calling setWebhook)
- *   GITHUB_TOKEN                — fine-grained PAT, scoped to this repo,
- *                                  with "Actions: Write" permission
- *   AUTHORIZED_CHAT_ID          — "959573065" (your chat ID)
+ *   TELEGRAM_BOT_TOKEN          — bot token
+ *   TELEGRAM_WEBHOOK_SECRET     — secret set when calling setWebhook
+ *   GITHUB_TOKEN                — fine-grained PAT, Actions: Write
+ *   AUTHORIZED_CHAT_ID          — your numeric chat ID
  *   GITHUB_OWNER                — your GitHub username/org
  *   GITHUB_REPO                 — "arjun-money-diaries"
- *
- * Deploy:
- *   npm i -g wrangler
- *   wrangler login
- *   cd cloudflare-worker
- *   wrangler deploy
- *
- * Wire up the Telegram webhook (one-time):
- *   curl "https://api.telegram.org/bot<TOKEN>/setWebhook" \
- *     -H "Content-Type: application/json" \
- *     -d '{"url":"https://arjun-approval.<your-subdomain>.workers.dev/",
- *          "secret_token":"<TELEGRAM_WEBHOOK_SECRET value>"}'
  */
 
 export default {
@@ -39,7 +26,6 @@ export default {
       return new Response("OK", { status: 200 });
     }
 
-    // Telegram sends this header if you set secret_token on setWebhook.
     const tg_secret = request.headers.get("x-telegram-bot-api-secret-token");
     if (tg_secret !== env.TELEGRAM_WEBHOOK_SECRET) {
       return new Response("forbidden", { status: 403 });
@@ -64,31 +50,26 @@ export default {
       upper === "APPROVE" ||
       upper === "REJECT" ||
       upper === "REGENERATE" ||
+      upper === "RUN" ||
       upper.startsWith("EDIT:");
 
     if (!valid) {
-      // Silently ignore non-command messages.
       return new Response("ignored", { status: 200 });
     }
 
-    // For EDIT we send the full original text (with "EDIT:" prefix
-    // stripped on the Python side). For others, action == upper-case
-    // canonical.
     const action = upper.startsWith("EDIT:") ? "EDIT" : upper;
     const editBody = upper.startsWith("EDIT:") ? text.slice(5).trim() : "";
 
-    // Fire the GitHub workflow_dispatch.
+    // RUN triggers generate.yml, everything else triggers approve.yml
+    const workflowFile = upper === "RUN" ? "generate.yml" : "approve.yml";
+
     const dispatchUrl =
       `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}` +
-      `/actions/workflows/approve.yml/dispatches`;
+      `/actions/workflows/${workflowFile}/dispatches`;
 
-    const ghBody = {
-      ref: "main",
-      inputs: {
-        action: action,
-        text: editBody,
-      },
-    };
+    const ghBody = upper === "RUN"
+      ? { ref: "main" }
+      : { ref: "main", inputs: { action: action, text: editBody } };
 
     const ghResp = await fetch(dispatchUrl, {
       method: "POST",
@@ -102,7 +83,12 @@ export default {
       body: JSON.stringify(ghBody),
     });
 
-    // Confirm to the user no matter what — fast feedback.
+    const confirmText = ghResp.ok
+      ? upper === "RUN"
+        ? `🚀 Generating next episode. Draft will arrive in ~60 seconds.`
+        : `✅ Got it. Sent '${action}' to GitHub. Watch for the run.`
+      : `🚨 Could not dispatch GitHub workflow: HTTP ${ghResp.status}`;
+
     await fetch(
       `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
@@ -110,9 +96,7 @@ export default {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: msg.chat.id,
-          text: ghResp.ok
-            ? `✅ Got it. Sent '${action}' to GitHub. Watch for the run.`
-            : `🚨 Could not dispatch GitHub workflow: HTTP ${ghResp.status}`,
+          text: confirmText,
         }),
       },
     );
