@@ -261,7 +261,7 @@ def build_user_prompt(
         "RULES:\n"
         "1. Your hook MUST be inspired by the hook line above. Capture that specific moment.\n"
         "2. Use ONLY the supporting character listed. No other named characters.\n"
-        "3. Total220-280 words. Count before finishing.\n"
+        "3. STRICT word count: 250-280 words MAXIMUM. Count every word. If over 280, cut before returning.\n"
         "4. First person as Arjun. Story-first. One core financial lesson woven naturally.\n"
         "5. End with a teaser that connects naturally to the next episode in the series.\n"
         "6. PLAIN TEXT ONLY. No markdown, no bold, no italics, no headers.\n"

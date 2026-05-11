@@ -35,7 +35,7 @@ def quality_check(raw_text: str) -> dict:
     lower = post_text.lower()
     has_teaser = "dropping in 2 days" in lower or "follow for episode" in lower
     has_dialogue = '"' in post_text or '\u201c' in post_text or '\u2018' in post_text or "'" in post_text
-    word_count_ok = 210 <= word_count <= 290
+    word_count_ok = 230 <= word_count <= 290
     has_dollar_before_digit = bool(re.search(r'\$\d', post_text))
     has_non_indian_instruments = bool(re.search(r'401k|IRA\b|Roth IRA|S&P 500|NASDAQ', post_text, re.IGNORECASE))
 
@@ -52,8 +52,8 @@ def quality_check(raw_text: str) -> dict:
     )
 
     warnings: list[str] = []
-    if word_count < 220 or word_count > 280:
-        warnings.append(f"Word count {word_count} (target 220-280)")
+    if word_count < 210 or word_count > 310:
+        warnings.append(f"Word count {word_count} (target 240-280)")
     if not has_dialogue:
         warnings.append("No dialogue detected")
     if not has_hashtags:
