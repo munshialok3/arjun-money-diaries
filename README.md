@@ -11,6 +11,25 @@ A fully automated LinkedIn content pipeline for a serialised personal finance se
 
 ---
 
+## By the numbers
+
+| | |
+|---|---|
+| Episodes planned | 44 (Season 1) |
+| Episodes posted | 4 (and counting) |
+| Workflows | 4 GitHub Actions workflows |
+| Python modules | 9 (generation, approval, QC, sheets, LLM, prompts, comms, watchdog, backup) |
+| LLM providers | 2 (Claude Sonnet 4.5 primary + Groq Llama 3.3 70B fallback) |
+| Infrastructure cost | $0/month |
+| Total operating cost | ~$2-4/month (Claude API only) |
+| Human touchpoints | 1 per episode (Telegram approval) |
+| Failure modes fixed | 8 silent failure modes identified and resolved |
+| Backup frequency | Daily — full Sheet → CSV → git commit |
+| Monitoring | 6-hourly watchdog + stuck episode detection |
+| Token rotation | Every 60 days (LinkedIn) |
+
+---
+
 ## How it works
 
 1. **Generates** — GitHub Actions cron triggers daily. Checks for stuck/pending episodes before proceeding. Picks the next queued episode from Google Sheets, builds a structured prompt with story continuity and character state, calls Claude Sonnet 4.5 (Groq Llama 3.3 70B as automatic fallback). Runs a tiered quality check: word count bands, dialogue presence, correct opener, hashtags, teaser line, currency symbol validation.
