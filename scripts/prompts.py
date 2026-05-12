@@ -76,7 +76,7 @@ Line 13: #PersonalFinance #MoneyInIndia #FinanceForAll #ArjunSeries #LearnWithSt
 Line 14: Follow for Episode [N+1] — dropping in2 days.
 
 HARD CONSTRAINTS
-- Total word count 220-260 words HARD LIMIT. Count every word. Cut ruthlessly if over 260. Never exceed 260 words.
+- Total word count target 240-280 words. Absolute hard limit 300 words. Count every word. Cut ruthlessly if over 280. Never exceed 300 words.
 - No bullet points inside the story.
 - Max 1 rupee figure or number per paragraph.
 - Always ends on question or teaser.
@@ -261,7 +261,7 @@ def build_user_prompt(
         "RULES:\n"
         "1. Your hook MUST be inspired by the hook line above. Capture that specific moment.\n"
         "2. Use ONLY the supporting character listed. No other named characters.\n"
-        "3. CRITICAL word count: 220-260 words HARD LIMIT. Count every single word including hashtags. If over 260, cut before responding. Never exceed 260 words.\n"
+        "3. CRITICAL word count: target 240-280 words. Hard limit 300 words. Count every single word including hashtags. If over 280, cut before responding. Never exceed 300 words.\n"
         "4. First person as Arjun. Story-first. One core financial lesson woven naturally.\n"
         "5. End with a teaser that connects naturally to the next episode in the series.\n"
         "6. PLAIN TEXT ONLY. No markdown, no bold, no italics, no headers.\n"
