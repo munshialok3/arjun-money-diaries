@@ -12,46 +12,9 @@ Cost estimate at 1 episode/day cadence:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import time
-from pathlib import Path
-from typing import Optional
 
 import requests
-
-
-# ---------------------------------------------------------------------
-# Cache (opportunistic)
-# ---------------------------------------------------------------------
-CACHE_DIR = Path(__file__).resolve().parent.parent / "backups" / "llm_cache"
-
-
-def _cache_key(system: str, user: str, model: str) -> str:
-    h = hashlib.sha256()
-    h.update(model.encode())
-    h.update(b"\x00")
-    h.update(system.encode())
-    h.update(b"\x00")
-    h.update(user.encode())
-    return h.hexdigest()
-
-
-def _cache_get(key: str) -> Optional[str]:
-    p = CACHE_DIR / f"{key}.json"
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text())["text"]
-    except Exception:
-        return None
-
-
-def _cache_put(key: str, text: str, meta: dict) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"text": text, "meta": meta, "ts": time.time()}
-    (CACHE_DIR / f"{key}.json").write_text(json.dumps(payload, indent=2))
 
 
 # ---------------------------------------------------------------------
@@ -140,27 +103,16 @@ def generate(
     user_prompt: str,
     *,
     max_tokens: int = 1500,
-    use_cache: bool = False,
 ) -> tuple[str, str]:
     """
-    Returns (text, provider_used). provider_used is "claude" or "groq".
+    Returns (text, provider_used). provider_used is 'claude' or 'groq'.
+    Tries Claude first, falls back to Groq on any error.
     """
-    if use_cache:
-        for model in (CLAUDE_MODEL, GROQ_MODEL):
-            cached = _cache_get(_cache_key(system_prompt, user_prompt, model))
-            if cached:
-                return cached, model.split("-")[0]
-
     last_err: Exception | None = None
 
     # Primary: Claude
     try:
         text = call_claude(system_prompt, user_prompt, max_tokens=max_tokens)
-        _cache_put(
-            _cache_key(system_prompt, user_prompt, CLAUDE_MODEL),
-            text,
-            {"provider": "claude", "model": CLAUDE_MODEL},
-        )
         return text, "claude"
     except Exception as e:
         last_err = e
@@ -169,11 +121,6 @@ def generate(
     # Fallback: Groq
     try:
         text = call_groq(system_prompt, user_prompt, max_tokens=max_tokens)
-        _cache_put(
-            _cache_key(system_prompt, user_prompt, GROQ_MODEL),
-            text,
-            {"provider": "groq", "model": GROQ_MODEL},
-        )
         return text, "groq"
     except Exception as e:
         raise RuntimeError(
