@@ -68,6 +68,7 @@ def call_claude(system_prompt: str, user_prompt: str, max_tokens: int = 1500) ->
     body = {
         "model": CLAUDE_MODEL,
         "max_tokens": max_tokens,
+        "temperature": 0.85,
         "system": system_prompt,
         "messages": [
             {"role": "user", "content": user_prompt}
