@@ -7,17 +7,15 @@ Modes (controlled by --mode):
               Runs every 6 hours via GitHub Actions.
   stuck     → alert if any episode is stuck at generating > 15 min.
               Runs every 6 hours alongside reminder.
-  analytics → fetch LinkedIn likes & comments for posted episodes.
-              Runs daily at 10:00 IST.
+  analytics → DISABLED. LinkedIn API does not grant social actions
+              access to new apps. Track likes/comments manually on LinkedIn.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
-import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -62,51 +60,9 @@ def stuck() -> int:
     return 0
 
 
-URN_RE = re.compile(r"urn:li:share:\d+")
-
-
 def analytics() -> int:
-    posted = sheets.episodes_by_status("posted")
-    total = len([ep for ep in posted if (ep.get("Post_URL") or "").strip()])
-    updated = 0
-
-    for ep in posted:
-        url = (ep.get("Post_URL") or "").strip()
-        if not url:
-            continue
-        m = URN_RE.search(url)
-        if not m:
-            continue
-        urn = m.group(0)
-        try:
-            data = comms.linkedin_fetch_social_actions(urn)
-        except Exception:
-            traceback.print_exc()
-            continue
-        likes = (data.get("likesSummary") or {}).get("totalLikes", 0)
-        comments = (
-            (data.get("commentsSummary") or {}).get("totalFirstLevelComments", 0)
-        )
-        try:
-            sheets.update_episode_fields(
-                ep["Episode_No"],
-                {"Likes": likes, "Comments": comments},
-            )
-            updated += 1
-        except Exception:
-            traceback.print_exc()
-
-    print(f"[watchdog] analytics: updated {updated}/{total} rows")
-
-    # Alert if nothing updated but we expected updates.
-    if total > 0 and updated == 0:
-        comms.telegram_send(
-            f"⚠️ Analytics updated 0/{total} posts — LinkedIn API may be broken. "
-            f"Check GitHub Actions logs."
-        )
-    else:
-        comms.telegram_send(f"📊 Analytics updated {updated}/{total} posted episodes.")
-
+    print("[watchdog] analytics: LinkedIn Social Actions API not available for this app.")
+    print("[watchdog] Track likes/comments manually at linkedin.com.")
     return 0
 
 

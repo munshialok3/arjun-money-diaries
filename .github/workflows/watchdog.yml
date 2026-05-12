@@ -4,15 +4,13 @@ on:
   schedule:
     # Every 6h: pending-approval reminders + stuck-generating check.
     - cron: '0 */6 * * *'
-    # 10:00 IST = 04:30 UTC: daily analytics.
-    - cron: '30 4 * * *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'reminder | stuck | analytics'
+        description: 'reminder | stuck'
         required: true
         type: choice
-        options: [reminder, stuck, analytics]
+        options: [reminder, stuck]
 
 permissions:
   contents: read
@@ -49,20 +47,3 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/watchdog.py --mode stuck
-
-  analytics:
-    if: ${{ github.event.schedule == '30 4 * * *' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'analytics') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.12', cache: pip }
-      - run: pip install -r requirements.txt
-      - env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          SHEET_ID: ${{ secrets.SHEET_ID }}
-          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scripts/watchdog.py --mode analytics
