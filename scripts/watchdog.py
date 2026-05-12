@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-watchdog.py — replaces n8n Watchdog + Analytics workflow.
+watchdog.py — monitoring and analytics.
 
-Two modes (controlled by --mode):
+Modes (controlled by --mode):
   reminder  → if any episode is pending_approval, ping Telegram.
-              GitHub Actions runs this every 6 hours.
-  analytics → for each posted episode with a Post_URL, fetch
-              LinkedIn likes & comments and update Sheet.
+              Runs every 6 hours via GitHub Actions.
+  stuck     → alert if any episode is stuck at generating > 15 min.
+              Runs every 6 hours alongside reminder.
+  analytics → fetch LinkedIn likes & comments for posted episodes.
               Runs daily at 10:00 IST.
 """
 
@@ -47,12 +48,28 @@ def reminder() -> int:
     return 0
 
 
+def stuck() -> int:
+    stuck_eps = sheets.get_stuck_generating(threshold_minutes=15)
+    if not stuck_eps:
+        return 0
+    for ep in stuck_eps:
+        comms.telegram_send(
+            f"🚨 Episode {ep.get('Episode_No')} is STUCK at Status=generating.\n"
+            f"Title: {ep.get('Title', '')}\n"
+            f"Generated_At: {ep.get('Generated_At', 'unknown')}\n\n"
+            f"Check GitHub Actions logs. To unblock, manually set Status=queued in the Sheet."
+        )
+    return 0
+
+
 URN_RE = re.compile(r"urn:li:share:\d+")
 
 
 def analytics() -> int:
     posted = sheets.episodes_by_status("posted")
+    total = len([ep for ep in posted if (ep.get("Post_URL") or "").strip()])
     updated = 0
+
     for ep in posted:
         url = (ep.get("Post_URL") or "").strip()
         if not url:
@@ -78,16 +95,33 @@ def analytics() -> int:
             updated += 1
         except Exception:
             traceback.print_exc()
-    print(f"[watchdog] analytics: updated {updated} rows")
+
+    print(f"[watchdog] analytics: updated {updated}/{total} rows")
+
+    # Alert if nothing updated but we expected updates.
+    if total > 0 and updated == 0:
+        comms.telegram_send(
+            f"⚠️ Analytics updated 0/{total} posts — LinkedIn API may be broken. "
+            f"Check GitHub Actions logs."
+        )
+    else:
+        comms.telegram_send(f"📊 Analytics updated {updated}/{total} posted episodes.")
+
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["reminder", "analytics"], required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["reminder", "stuck", "analytics"],
+        required=True,
+    )
     args = parser.parse_args()
     if args.mode == "reminder":
         return reminder()
+    if args.mode == "stuck":
+        return stuck()
     return analytics()
 
 

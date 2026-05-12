@@ -11,7 +11,7 @@ Schemas are exactly as today:
     Episode_No, Title, Concept, Hook_Line, Supporting_Character,
     Difficulty_Tier, Status, Post_URL, Likes, Comments, Posted_Date,
     Concepts_Used_So_Far, post_text, word_count, has_dialogue,
-    has_hashtags, has_teaser, quality_passed
+    has_hashtags, has_teaser, quality_passed, Generated_At
 
   Story_State columns:
     Character, Current_State, Last_Updated_Episode
@@ -33,32 +33,45 @@ from google.oauth2.service_account import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# Singleton client and sheet — avoids re-authenticating on every call.
+_CLIENT: gspread.Client | None = None
+_SPREADSHEET = None
+
 
 def _client() -> gspread.Client:
-    """Build a gspread client from either a path or inline JSON env var."""
-    raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not raw:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required")
-    if raw.lstrip().startswith("{"):
-        info = json.loads(raw)
-    else:
-        # treat as path
-        with open(raw) as f:
-            info = json.load(f)
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    global _CLIENT
+    if _CLIENT is None:
+        raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+        if not raw:
+            raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required")
+        if raw.lstrip().startswith("{"):
+            info = json.loads(raw)
+        else:
+            with open(raw) as f:
+                info = json.load(f)
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        _CLIENT = gspread.authorize(creds)
+    return _CLIENT
 
 
 def _sheet():
-    sheet_id = os.environ["SHEET_ID"]
-    return _client().open_by_key(sheet_id)
+    global _SPREADSHEET
+    if _SPREADSHEET is None:
+        sheet_id = os.environ["SHEET_ID"]
+        _SPREADSHEET = _client().open_by_key(sheet_id)
+    return _SPREADSHEET
+
+
+def get_worksheet(name: str):
+    """Public accessor for a named worksheet."""
+    return _sheet().worksheet(name)
 
 
 # ---------------------------------------------------------------------
 # Episodes tab
 # ---------------------------------------------------------------------
 def all_episodes() -> list[dict[str, Any]]:
-    ws = _sheet().worksheet("Episodes")
+    ws = get_worksheet("Episodes")
     return ws.get_all_records()
 
 
@@ -79,15 +92,41 @@ def next_queued_episode() -> dict[str, Any] | None:
     return queued[0]
 
 
+def get_stuck_generating(threshold_minutes: int = 15) -> list[dict[str, Any]]:
+    """Return episodes stuck at Status=generating for longer than threshold_minutes.
+    Uses the Generated_At column (UTC ISO timestamp) to determine age."""
+    generating = episodes_by_status("generating")
+    if not generating:
+        return []
+    stuck = []
+    now = datetime.now(timezone.utc)
+    for ep in generating:
+        ts_raw = str(ep.get("Generated_At") or "").strip()
+        if not ts_raw:
+            # No timestamp — conservatively treat as stuck.
+            stuck.append(ep)
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_minutes = (now - ts).total_seconds() / 60
+            if age_minutes > threshold_minutes:
+                stuck.append(ep)
+        except ValueError:
+            # Unparseable timestamp — treat as stuck.
+            stuck.append(ep)
+    return stuck
+
+
 def update_episode_fields(episode_no: float | int, fields: dict[str, Any]) -> None:
     """Update one or more cells on the row whose Episode_No matches."""
-    ws = _sheet().worksheet("Episodes")
+    ws = get_worksheet("Episodes")
     headers = ws.row_values(1)
-    # Find the row.
-    cell = ws.find(str(int(float(episode_no))), in_column=headers.index("Episode_No") + 1)
+    col = headers.index("Episode_No") + 1
+    cell = ws.find(str(int(float(episode_no))), in_column=col)
     if cell is None:
-        # try the float representation (1.0)
-        cell = ws.find(str(float(episode_no)), in_column=headers.index("Episode_No") + 1)
+        cell = ws.find(str(float(episode_no)), in_column=col)
     if cell is None:
         raise RuntimeError(f"Episode_No {episode_no} not found in sheet")
     row = cell.row
@@ -95,9 +134,9 @@ def update_episode_fields(episode_no: float | int, fields: dict[str, Any]) -> No
     for k, v in fields.items():
         if k not in headers:
             raise RuntimeError(f"Unknown column: {k}")
-        col = headers.index(k) + 1
+        c = headers.index(k) + 1
         updates.append({
-            "range": gspread.utils.rowcol_to_a1(row, col),
+            "range": gspread.utils.rowcol_to_a1(row, c),
             "values": [[v if v is not None else ""]],
         })
     if updates:
@@ -105,7 +144,11 @@ def update_episode_fields(episode_no: float | int, fields: dict[str, Any]) -> No
 
 
 def mark_status(episode_no: float | int, status: str) -> None:
-    update_episode_fields(episode_no, {"Status": status})
+    """Mark episode status. If marking as 'generating', also stamp Generated_At."""
+    fields: dict[str, Any] = {"Status": status}
+    if status == "generating":
+        fields["Generated_At"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    update_episode_fields(episode_no, fields)
 
 
 def save_draft(
@@ -146,9 +189,8 @@ def mark_posted(episode_no: float | int, post_url: str) -> None:
 
 
 def update_concepts_for_all_queued(concepts_string: str) -> None:
-    """Replicates Prepare All Concepts Updates logic — sets the
-    Concepts_Used_So_Far cell on every queued row."""
-    ws = _sheet().worksheet("Episodes")
+    """Sets Concepts_Used_So_Far on every queued row."""
+    ws = get_worksheet("Episodes")
     headers = ws.row_values(1)
     col_status = headers.index("Status") + 1
     col_concepts = headers.index("Concepts_Used_So_Far") + 1
@@ -175,21 +217,20 @@ def build_concepts_string() -> str:
 # Story_State tab
 # ---------------------------------------------------------------------
 def get_story_state() -> list[dict[str, Any]]:
-    ws = _sheet().worksheet("Story_State")
+    ws = get_worksheet("Story_State")
     return ws.get_all_records()
 
 
 def upsert_story_state_rows(updates: list[dict[str, Any]]) -> None:
     """updates: [{Character, Current_State, Last_Updated_Episode}, ...]
     Upserts by Character (case-insensitive)."""
-    ws = _sheet().worksheet("Story_State")
+    ws = get_worksheet("Story_State")
     headers = ws.row_values(1)
     rows = ws.get_all_values()
     char_col = headers.index("Character")
     state_col = headers.index("Current_State")
     ep_col = headers.index("Last_Updated_Episode")
 
-    # Build {character_lower: row_index_1based}
     char_to_row = {}
     for i, row in enumerate(rows[1:], start=2):
         if len(row) > char_col and row[char_col].strip():
