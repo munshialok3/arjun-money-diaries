@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import traceback
 
@@ -40,7 +41,6 @@ def find_pending_episode() -> dict | None:
 
 
 def strip_markdown_quick(s: str) -> str:
-    import re
     s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
     s = re.sub(r"\*([^*]+)\*", r"\1", s)
     return s.strip()
@@ -86,19 +86,30 @@ def do_approve(final_text: str, ep: dict) -> int:
         user_msg = prompts.build_story_state_user_prompt(
             ep_no, final_text, story_rows
         )
-        text, provider = llm.generate(sys_msg, user_msg, max_tokens=800)
-        # Parse JSON array (may be wrapped or trailing text).
+        text, provider = llm.generate(sys_msg, user_msg, max_tokens=400)
+
+        # Parse JSON array — handle wrapped or trailing text from LLM.
+        updates = None
         try:
             updates = json.loads(text)
         except json.JSONDecodeError:
-            import re
-
             m = re.search(r"\[.*\]", text, re.S)
-            updates = json.loads(m.group(0)) if m else []
+            if m:
+                try:
+                    updates = json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    updates = None
+
         if updates:
             sheets.upsert_story_state_rows(updates)
+            print(f"[approve] story state: updated {len(updates)} character(s)")
         else:
-            print("[approve] story state: no updates parsed")
+            # Alert explicitly — silent failure was the bug.
+            comms.telegram_send(
+                f"⚠️ Story state NOT updated for Episode {ep_no} — "
+                f"LLM returned unparseable JSON.\nRaw: {text[:300]}"
+            )
+
     except Exception as e:
         traceback.print_exc()
         comms.telegram_send(f"⚠️ Story state update failed (post still went out): {e}")
@@ -139,12 +150,11 @@ def main() -> int:
     text_raw = os.environ.get("APPROVAL_TEXT", "")
 
     upper = action_raw.upper()
-    if upper.startswith("EDIT:"):
+
+    # EDIT: the Cloudflare Worker already strips the "EDIT:" prefix and passes
+    # only the body as APPROVAL_TEXT. So text_raw IS the post body — no slicing.
+    if upper.startswith("EDIT:") or upper == "EDIT":
         action = "APPROVE"
-        final_text = strip_markdown_quick(text_raw[5:].strip())
-    elif upper == "EDIT":
-        action = "APPROVE"
-        # Body of edit is in APPROVAL_TEXT after the EDIT: prefix already stripped
         final_text = strip_markdown_quick(text_raw)
     elif upper == "APPROVE":
         action = "APPROVE"
